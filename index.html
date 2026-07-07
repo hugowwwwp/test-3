@@ -1,0 +1,722 @@
+// Suivi objectifs — v2.1
+import { useState, useEffect, useCallback, useRef } from "react";
+// v2.1
+
+// ---- helpers ----------------------------------------------------------
+
+function todayKey(d = new Date()) {
+  return d.toISOString().slice(0, 10);
+}
+
+function isoWeekKey(d = new Date()) {
+  const date = new Date(Date.UTC(d.getFullYear(), d.getMonth(), d.getDate()));
+  const dayNum = (date.getUTCDay() + 6) % 7;
+  date.setUTCDate(date.getUTCDate() - dayNum + 3);
+  const firstThursday = new Date(Date.UTC(date.getUTCFullYear(), 0, 4));
+  const week = 1 + Math.round(
+    ((date - firstThursday) / 86400000 - 3 + ((firstThursday.getUTCDay() + 6) % 7)) / 7
+  );
+  return `${date.getUTCFullYear()}-W${String(week).padStart(2, "0")}`;
+}
+
+function formatDateFR(key) {
+  const d = new Date(key + "T00:00:00");
+  return d.toLocaleDateString("fr-FR", { weekday: "long", day: "numeric", month: "long" });
+}
+
+const DAILY_ITEMS = [
+  { id: "pasucre", label: "Pas de céréales sucrées / pâte à tartiner", color: "#FF5A36" },
+  { id: "dejeuner", label: "Déjeuner complet (protéine + fruit ou légume + féculent)", color: "#00C48C" },
+  { id: "collation", label: "Collation saine si besoin", color: "#00C48C" },
+  { id: "diner", label: "Dîner protéine + fruit ou légume", color: "#00C48C" },
+  { id: "eau", label: "Eau comme boisson principale", color: "#2FB8F0" },
+  { id: "sommeil", label: "7-8h de sommeil", color: "#7C5CFF" },
+];
+
+const OPTIONAL_ITEMS = [
+  { id: "petitdej", label: "Petit-déj protéiné (si t'as faim le matin)", color: "#F0A32F" },
+];
+
+const MEAL_SLOTS = [
+  { id: "petitdej", label: "Petit-déj" },
+  { id: "dejeuner", label: "Déjeuner" },
+  { id: "collation", label: "Collation" },
+  { id: "diner", label: "Dîner" },
+];
+
+const DEFAULT_TARGET = 2400;
+
+// Planning hebdo : 0 = dimanche ... 6 = samedi (JS Date.getDay())
+const SCHEDULE = {
+  1: { type: "climb", label: "Escalade" },
+  2: { type: "rest", label: "Repos ou marche" },
+  3: { type: "home", label: "Séance maison" },
+  4: { type: "climb", label: "Escalade" },
+  5: { type: "rest", label: "Repos" },
+  6: { type: "home", label: "Séance maison" },
+  0: { type: "climb", label: "Escalade (ou repos si fatigue)" },
+};
+
+const HOME_WORKOUT = [
+  { name: "Squats", detail: "15 reps" },
+  { name: "Pompes", detail: "10-15 reps" },
+  { name: "Fentes", detail: "10 reps / jambe" },
+  { name: "Planche (gainage)", detail: "30-45 sec" },
+  { name: "Superman", detail: "12 reps" },
+  { name: "Mountain climbers", detail: "20 reps (10/jambe)" },
+];
+const HOME_WORKOUT_ROUNDS = 3;
+
+// ---- storage ------------------------------------------------------
+
+async function loadDay(key) {
+  try {
+    const res = await window.storage.get(`day:${key}`, false);
+    return res ? JSON.parse(res.value) : null;
+  } catch {
+    return null;
+  }
+}
+async function saveDay(key, data) {
+  try {
+    await window.storage.set(`day:${key}`, JSON.stringify(data), false);
+  } catch (e) {
+    console.error(e);
+  }
+}
+async function loadWeek(key) {
+  try {
+    const res = await window.storage.get(`week:${key}`, false);
+    return res ? JSON.parse(res.value) : null;
+  } catch {
+    return null;
+  }
+}
+async function saveWeek(key, data) {
+  try {
+    await window.storage.set(`week:${key}`, JSON.stringify(data), false);
+  } catch (e) {
+    console.error(e);
+  }
+}
+async function loadSettings() {
+  try {
+    const res = await window.storage.get("settings", false);
+    return res ? JSON.parse(res.value) : null;
+  } catch {
+    return null;
+  }
+}
+async function saveSettings(data) {
+  try {
+    await window.storage.set("settings", JSON.stringify(data), false);
+  } catch (e) {
+    console.error(e);
+  }
+}
+
+function emptyDay() {
+  const checks = {};
+  DAILY_ITEMS.forEach((i) => (checks[i.id] = false));
+  OPTIONAL_ITEMS.forEach((i) => (checks[i.id] = false));
+  const meals = {};
+  MEAL_SLOTS.forEach((m) => (meals[m.id] = { text: "", kcal: "" }));
+  return { checks, meals };
+}
+function emptyWeek() {
+  return { climbing: 0, home: 0, weight: "" };
+}
+
+// ---- UI pieces ------------------------------------------------------
+
+function Check({ checked, onToggle, label, color }) {
+  const [pop, setPop] = useState(false);
+  return (
+    <button
+      onClick={() => {
+        setPop(true);
+        setTimeout(() => setPop(false), 320);
+        onToggle();
+      }}
+      style={{
+        display: "flex",
+        alignItems: "center",
+        gap: 14,
+        width: "100%",
+        textAlign: "left",
+        background: checked ? `${color}14` : "#FFFFFF",
+        border: `2px solid ${checked ? color : "#ECEAE3"}`,
+        borderRadius: 16,
+        padding: "14px 16px",
+        marginBottom: 10,
+        cursor: "pointer",
+        transition: "border-color 0.2s ease, background 0.2s ease, transform 0.15s ease",
+        transform: pop ? "scale(1.02)" : "scale(1)",
+        boxShadow: checked ? `0 2px 14px ${color}22` : "0 1px 3px rgba(20,20,30,0.04)",
+      }}
+    >
+      <span
+        style={{
+          width: 26,
+          height: 26,
+          minWidth: 26,
+          borderRadius: 9,
+          border: `2px solid ${checked ? color : "#D8D5CC"}`,
+          background: checked ? color : "transparent",
+          display: "flex",
+          alignItems: "center",
+          justifyContent: "center",
+          fontSize: 15,
+          color: "#FFF",
+          fontWeight: 800,
+          transition: "all 0.2s cubic-bezier(0.34, 1.56, 0.64, 1)",
+          transform: checked && pop ? "scale(1.25) rotate(-8deg)" : "scale(1)",
+        }}
+      >
+        {checked ? "✓" : ""}
+      </span>
+      <span
+        style={{
+          color: "#1A1A2E",
+          fontSize: 15,
+          fontWeight: checked ? 600 : 500,
+          fontFamily: "'Inter', sans-serif",
+        }}
+      >
+        {label}
+      </span>
+    </button>
+  );
+}
+
+function Stepper({ value, onChange, max, label, color, emoji }) {
+  return (
+    <div
+      style={{
+        display: "flex",
+        alignItems: "center",
+        justifyContent: "space-between",
+        background: "#FFFFFF",
+        border: "2px solid #ECEAE3",
+        borderRadius: 16,
+        padding: "14px 16px",
+        marginBottom: 10,
+        boxShadow: "0 1px 3px rgba(20,20,30,0.04)",
+      }}
+    >
+      <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
+        <span style={{ fontSize: 22 }}>{emoji}</span>
+        <div>
+          <div style={{ color: "#1A1A2E", fontSize: 15, fontWeight: 600, fontFamily: "'Inter', sans-serif" }}>
+            {label}
+          </div>
+          <div style={{ color: "#9C99A8", fontSize: 12, fontFamily: "'Inter', sans-serif" }}>
+            {value} / {max} cette semaine
+          </div>
+        </div>
+      </div>
+      <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
+        <button onClick={() => onChange(Math.max(0, value - 1))} style={{ ...stepBtnStyle, color }}>
+          −
+        </button>
+        <div style={{ display: "flex", gap: 4 }}>
+          {Array.from({ length: max }).map((_, i) => (
+            <span
+              key={i}
+              style={{
+                width: 9,
+                height: 9,
+                borderRadius: "50%",
+                background: i < value ? color : "#ECEAE3",
+                transition: "background 0.2s ease, transform 0.2s ease",
+                transform: i < value ? "scale(1.15)" : "scale(1)",
+              }}
+            />
+          ))}
+        </div>
+        <button onClick={() => onChange(Math.min(max + 2, value + 1))} style={{ ...stepBtnStyle, color }}>
+          +
+        </button>
+      </div>
+    </div>
+  );
+}
+
+const stepBtnStyle = {
+  width: 30,
+  height: 30,
+  borderRadius: 10,
+  border: "2px solid #ECEAE3",
+  background: "#FAF8F4",
+  fontSize: 17,
+  fontWeight: 700,
+  cursor: "pointer",
+  display: "flex",
+  alignItems: "center",
+  justifyContent: "center",
+};
+
+// ---- main ------------------------------------------------------
+
+export default function Tracker() {
+  const [ready, setReady] = useState(false);
+  const [dateKey] = useState(todayKey());
+  const [weekKey] = useState(isoWeekKey());
+  const [day, setDay] = useState(emptyDay());
+  const [week, setWeek] = useState(emptyWeek());
+  const [target, setTarget] = useState(DEFAULT_TARGET);
+  const [editingTarget, setEditingTarget] = useState(false);
+  const [celebrate, setCelebrate] = useState(false);
+  const prevDone = useRef(0);
+
+  useEffect(() => {
+    (async () => {
+      const [d, w, s] = await Promise.all([loadDay(dateKey), loadWeek(weekKey), loadSettings()]);
+      setDay(d || emptyDay());
+      setWeek(w || emptyWeek());
+      if (s?.target) setTarget(s.target);
+      setReady(true);
+    })();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  const toggleCheck = useCallback(
+    (id) => {
+      setDay((prev) => {
+        const next = { ...prev, checks: { ...prev.checks, [id]: !prev.checks[id] } };
+        saveDay(dateKey, next);
+        const doneCount = DAILY_ITEMS.filter((it) => next.checks[it.id]).length;
+        if (doneCount === DAILY_ITEMS.length && prevDone.current !== DAILY_ITEMS.length) {
+          setCelebrate(true);
+          setTimeout(() => setCelebrate(false), 1600);
+        }
+        prevDone.current = doneCount;
+        return next;
+      });
+    },
+    [dateKey]
+  );
+
+  const updateMeal = useCallback(
+    (id, field, value) => {
+      setDay((prev) => {
+        const next = { ...prev, meals: { ...prev.meals, [id]: { ...prev.meals[id], [field]: value } } };
+        saveDay(dateKey, next);
+        return next;
+      });
+    },
+    [dateKey]
+  );
+
+  const updateWeek = useCallback(
+    (field, value) => {
+      setWeek((prev) => {
+        const next = { ...prev, [field]: value };
+        saveWeek(weekKey, next);
+        return next;
+      });
+    },
+    [weekKey]
+  );
+
+  const commitTarget = (val) => {
+    const num = parseInt(val, 10);
+    const clean = Number.isFinite(num) && num > 0 ? num : DEFAULT_TARGET;
+    setTarget(clean);
+    saveSettings({ target: clean });
+    setEditingTarget(false);
+  };
+
+  if (!ready) {
+    return (
+      <div style={{ ...pageStyle, alignItems: "center", justifyContent: "center", display: "flex" }}>
+        <div style={{ color: "#9C99A8", fontFamily: "'Inter', sans-serif" }}>Chargement…</div>
+      </div>
+    );
+  }
+
+  const totalChecks = DAILY_ITEMS.length;
+  const doneChecks = DAILY_ITEMS.filter((it) => day.checks[it.id]).length;
+  const pct = (doneChecks / totalChecks) * 100;
+
+  const dow = new Date(dateKey + "T00:00:00").getDay();
+  const activity = SCHEDULE[dow];
+  const activityStyle = {
+    climb: { emoji: "🧗", color: "#FF5A36", bg: "linear-gradient(135deg,#FFF1EA,#FFE4D6)" },
+    home: { emoji: "🏠", color: "#7C5CFF", bg: "linear-gradient(135deg,#F1EBFF,#E6DBFF)" },
+    rest: { emoji: "😴", color: "#2FB8F0", bg: "linear-gradient(135deg,#EAF6FF,#DCEEFF)" },
+  }[activity.type];
+
+  const totalKcal = MEAL_SLOTS.reduce((sum, m) => {
+    const v = parseInt(day.meals[m.id]?.kcal, 10);
+    return sum + (Number.isFinite(v) ? v : 0);
+  }, 0);
+
+  const low = target - 250;
+  const high = target + 150;
+  let kcalStatus = { text: "En cible", color: "#00C48C", bg: "#00C48C14" };
+  if (totalKcal === 0) kcalStatus = { text: "Pas encore de repas noté", color: "#9C99A8", bg: "#F4F2EC" };
+  else if (totalKcal < low) kcalStatus = { text: "Un peu bas — mange à ta faim", color: "#F0A32F", bg: "#F0A32F14" };
+  else if (totalKcal > high) kcalStatus = { text: "Au-dessus de l'objectif", color: "#FF5A36", bg: "#FF5A3614" };
+
+  return (
+    <div style={pageStyle}>
+      <style>{`
+        @import url('https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@500;600;700;800&family=Inter:wght@400;500;600;700&display=swap');
+        * { box-sizing: border-box; }
+        input::placeholder { color: #C2BFB5; }
+        @keyframes fadeUp { from { opacity: 0; transform: translateY(14px); } to { opacity: 1; transform: translateY(0); } }
+        @keyframes floaty { 0%,100% { transform: translateY(0px); } 50% { transform: translateY(-6px); } }
+        @keyframes shimmer { 0% { background-position: -200px 0; } 100% { background-position: 200px 0; } }
+        @keyframes popIn { 0% { transform: scale(0.6) rotate(-10deg); opacity: 0; } 60% { transform: scale(1.1) rotate(4deg); } 100% { transform: scale(1) rotate(0deg); opacity: 1; } }
+        .fade-item { animation: fadeUp 0.5s ease both; }
+        .celebrate-badge { animation: popIn 0.5s cubic-bezier(0.34,1.56,0.64,1) both; }
+      `}</style>
+
+      {celebrate && (
+        <div
+          className="celebrate-badge"
+          style={{
+            position: "fixed",
+            top: 24,
+            left: "50%",
+            transform: "translateX(-50%)",
+            zIndex: 50,
+            background: "linear-gradient(135deg, #FF5A36, #7C5CFF)",
+            color: "#fff",
+            padding: "12px 22px",
+            borderRadius: 999,
+            fontFamily: "'Space Grotesk', sans-serif",
+            fontWeight: 700,
+            fontSize: 14,
+            boxShadow: "0 8px 24px rgba(124,92,255,0.35)",
+          }}
+        >
+          🔥 Journée complète !
+        </div>
+      )}
+
+      <div style={{ maxWidth: 480, margin: "0 auto", padding: "30px 18px 60px" }}>
+        {/* Hero */}
+        <div
+          className="fade-item"
+          style={{
+            background: "linear-gradient(135deg, #FFF1EA 0%, #FDEEFF 55%, #EAF6FF 100%)",
+            borderRadius: 24,
+            padding: "24px 22px",
+            marginBottom: 20,
+            position: "relative",
+            overflow: "hidden",
+          }}
+        >
+          <div
+            style={{
+              fontFamily: "'Space Grotesk', sans-serif",
+              fontSize: 12,
+              fontWeight: 700,
+              letterSpacing: "0.14em",
+              textTransform: "uppercase",
+              color: "#FF5A36",
+              marginBottom: 6,
+            }}
+          >
+            Prise de prise 🧗
+          </div>
+          <h1
+            style={{
+              fontFamily: "'Space Grotesk', sans-serif",
+              fontSize: 30,
+              fontWeight: 800,
+              color: "#1A1A2E",
+              margin: 0,
+              textTransform: "capitalize",
+              lineHeight: 1.1,
+            }}
+          >
+            {formatDateFR(dateKey)}
+          </h1>
+
+          <div style={{ marginTop: 18 }}>
+            <div style={{ display: "flex", justifyContent: "space-between", marginBottom: 8 }}>
+              <span style={{ color: "#5B5868", fontSize: 13, fontFamily: "'Inter', sans-serif", fontWeight: 600 }}>
+                Objectifs du jour
+              </span>
+              <span style={{ color: "#1A1A2E", fontSize: 13, fontFamily: "'Space Grotesk', sans-serif", fontWeight: 700 }}>
+                {doneChecks}/{totalChecks}
+              </span>
+            </div>
+            <div style={{ height: 12, background: "#FFFFFFaa", borderRadius: 999, overflow: "hidden" }}>
+              <div
+                style={{
+                  height: "100%",
+                  width: `${pct}%`,
+                  borderRadius: 999,
+                  background: "linear-gradient(90deg, #FF5A36, #7C5CFF)",
+                  transition: "width 0.4s cubic-bezier(0.34, 1.56, 0.64, 1)",
+                  boxShadow: pct > 0 ? "0 0 12px rgba(255,90,54,0.5)" : "none",
+                }}
+              />
+            </div>
+          </div>
+        </div>
+
+        {/* Sport du jour */}
+        <div
+          className="fade-item"
+          style={{
+            background: activityStyle.bg,
+            borderRadius: 20,
+            padding: "18px 20px",
+            marginBottom: 20,
+            animationDelay: "0.03s",
+          }}
+        >
+          <div style={{ display: "flex", alignItems: "center", gap: 12 }}>
+            <span style={{ fontSize: 28 }}>{activityStyle.emoji}</span>
+            <div>
+              <div style={{ fontFamily: "'Inter', sans-serif", fontSize: 12, fontWeight: 600, color: "#5B5868", textTransform: "uppercase", letterSpacing: "0.06em" }}>
+                Sport aujourd'hui
+              </div>
+              <div style={{ fontFamily: "'Space Grotesk', sans-serif", fontSize: 19, fontWeight: 700, color: "#1A1A2E" }}>
+                {activity.label}
+              </div>
+            </div>
+          </div>
+
+          {activity.type === "home" && (
+            <div style={{ marginTop: 14, paddingTop: 14, borderTop: "2px dashed rgba(26,26,46,0.12)" }}>
+              <div style={{ fontFamily: "'Inter', sans-serif", fontSize: 12.5, fontWeight: 700, color: activityStyle.color, marginBottom: 10 }}>
+                {HOME_WORKOUT_ROUNDS} tours du circuit — ~15 sec de récup entre chaque exercice
+              </div>
+              {HOME_WORKOUT.map((ex, i) => (
+                <div
+                  key={ex.name}
+                  style={{
+                    display: "flex",
+                    justifyContent: "space-between",
+                    alignItems: "center",
+                    padding: "9px 0",
+                    borderBottom: i < HOME_WORKOUT.length - 1 ? "1px solid rgba(26,26,46,0.08)" : "none",
+                  }}
+                >
+                  <span style={{ fontFamily: "'Inter', sans-serif", fontSize: 14, fontWeight: 600, color: "#1A1A2E" }}>
+                    {i + 1}. {ex.name}
+                  </span>
+                  <span style={{ fontFamily: "'Space Grotesk', sans-serif", fontSize: 13, fontWeight: 700, color: activityStyle.color }}>
+                    {ex.detail}
+                  </span>
+                </div>
+              ))}
+            </div>
+          )}
+        </div>
+
+        {/* Daily checklist */}
+        <Section title="Aujourd'hui" emoji="✅" delay={0.05}>
+          {DAILY_ITEMS.map((item, i) => (
+            <div key={item.id} className="fade-item" style={{ animationDelay: `${0.08 * i}s` }}>
+              <Check label={item.label} color={item.color} checked={day.checks[item.id]} onToggle={() => toggleCheck(item.id)} />
+            </div>
+          ))}
+        </Section>
+
+        {/* Optional items */}
+        <div className="fade-item" style={{ marginBottom: 22, animationDelay: "0.08s" }}>
+          <div
+            style={{
+              fontFamily: "'Inter', sans-serif",
+              fontSize: 12,
+              fontWeight: 600,
+              color: "#B3B0BE",
+              marginBottom: 8,
+              textTransform: "uppercase",
+              letterSpacing: "0.04em",
+            }}
+          >
+            Optionnel — pas compté dans ta progression
+          </div>
+          {OPTIONAL_ITEMS.map((item) => (
+            <Check
+              key={item.id}
+              label={item.label}
+              color={item.color}
+              checked={day.checks[item.id]}
+              onToggle={() => toggleCheck(item.id)}
+            />
+          ))}
+        </div>
+
+        {/* Meals */}
+        <Section title="Repas du jour" emoji="🍽️" delay={0.1}>
+          <div
+            style={{
+              background: "#FFFFFF",
+              border: "2px solid #ECEAE3",
+              borderRadius: 20,
+              padding: 18,
+              boxShadow: "0 1px 3px rgba(20,20,30,0.04)",
+            }}
+          >
+            {MEAL_SLOTS.map((m) => (
+              <div key={m.id} style={{ marginBottom: 14 }}>
+                <div style={{ color: "#9C99A8", fontSize: 12, marginBottom: 6, fontFamily: "'Inter', sans-serif", fontWeight: 600 }}>
+                  {m.label}
+                </div>
+                <div style={{ display: "flex", gap: 8 }}>
+                  <input
+                    value={day.meals[m.id]?.text || ""}
+                    onChange={(e) => updateMeal(m.id, "text", e.target.value)}
+                    placeholder="ce que t'as mangé"
+                    style={{ ...inputStyle, flex: 1 }}
+                  />
+                  <input
+                    value={day.meals[m.id]?.kcal || ""}
+                    onChange={(e) => updateMeal(m.id, "kcal", e.target.value.replace(/[^0-9]/g, ""))}
+                    placeholder="kcal"
+                    inputMode="numeric"
+                    style={{ ...inputStyle, width: 76, textAlign: "center" }}
+                  />
+                </div>
+              </div>
+            ))}
+
+            <div
+              style={{
+                marginTop: 8,
+                paddingTop: 16,
+                borderTop: "2px dashed #ECEAE3",
+                display: "flex",
+                justifyContent: "space-between",
+                alignItems: "center",
+              }}
+            >
+              <div>
+                <div style={{ color: "#1A1A2E", fontSize: 26, fontWeight: 800, fontFamily: "'Space Grotesk', sans-serif" }}>
+                  {totalKcal} <span style={{ fontSize: 13, color: "#9C99A8", fontWeight: 500 }}>kcal</span>
+                </div>
+                <div
+                  style={{
+                    display: "inline-block",
+                    marginTop: 4,
+                    color: kcalStatus.color,
+                    background: kcalStatus.bg,
+                    borderRadius: 999,
+                    padding: "3px 10px",
+                    fontSize: 12,
+                    fontWeight: 700,
+                    fontFamily: "'Inter', sans-serif",
+                  }}
+                >
+                  {kcalStatus.text}
+                </div>
+              </div>
+              <div style={{ textAlign: "right" }}>
+                <div style={{ color: "#9C99A8", fontSize: 11, fontFamily: "'Inter', sans-serif", fontWeight: 600 }}>Objectif</div>
+                {editingTarget ? (
+                  <input
+                    autoFocus
+                    defaultValue={target}
+                    onBlur={(e) => commitTarget(e.target.value)}
+                    onKeyDown={(e) => e.key === "Enter" && commitTarget(e.target.value)}
+                    inputMode="numeric"
+                    style={{ ...inputStyle, width: 88, textAlign: "right", padding: "5px 10px" }}
+                  />
+                ) : (
+                  <button
+                    onClick={() => setEditingTarget(true)}
+                    style={{
+                      background: "none",
+                      border: "none",
+                      color: "#7C5CFF",
+                      fontSize: 16,
+                      fontWeight: 700,
+                      cursor: "pointer",
+                      fontFamily: "'Space Grotesk', sans-serif",
+                    }}
+                  >
+                    {target} kcal ✎
+                  </button>
+                )}
+              </div>
+            </div>
+          </div>
+        </Section>
+
+        {/* Weekly */}
+        <Section title="Cette semaine" emoji="📅" delay={0.15}>
+          <Stepper label="Séances escalade" emoji="🧗" color="#FF5A36" value={week.climbing} max={3} onChange={(v) => updateWeek("climbing", v)} />
+          <Stepper label="Séances maison" emoji="🏠" color="#7C5CFF" value={week.home} max={3} onChange={(v) => updateWeek("home", v)} />
+          <div
+            style={{
+              background: "#FFFFFF",
+              border: "2px solid #ECEAE3",
+              borderRadius: 16,
+              padding: "14px 16px",
+              display: "flex",
+              justifyContent: "space-between",
+              alignItems: "center",
+              boxShadow: "0 1px 3px rgba(20,20,30,0.04)",
+            }}
+          >
+            <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
+              <span style={{ fontSize: 22 }}>⚖️</span>
+              <div style={{ color: "#1A1A2E", fontSize: 15, fontWeight: 600, fontFamily: "'Inter', sans-serif" }}>
+                Pesée de la semaine
+              </div>
+            </div>
+            <input
+              value={week.weight}
+              onChange={(e) => updateWeek("weight", e.target.value.replace(/[^0-9.]/g, ""))}
+              placeholder="kg"
+              inputMode="decimal"
+              style={{ ...inputStyle, width: 70, textAlign: "center" }}
+            />
+          </div>
+        </Section>
+
+        <div style={{ textAlign: "center", color: "#B3B0BE", fontSize: 12, marginTop: 26, fontFamily: "'Inter', sans-serif" }}>
+          Une pesée par semaine suffit — la régularité compte plus que le chiffre du jour 💪
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function Section({ title, emoji, delay, children }) {
+  return (
+    <div className="fade-item" style={{ marginBottom: 22, animationDelay: `${delay}s` }}>
+      <div
+        style={{
+          display: "flex",
+          alignItems: "center",
+          gap: 8,
+          fontFamily: "'Space Grotesk', sans-serif",
+          fontSize: 15,
+          fontWeight: 700,
+          color: "#1A1A2E",
+          marginBottom: 12,
+        }}
+      >
+        <span style={{ fontSize: 18 }}>{emoji}</span>
+        {title}
+      </div>
+      {children}
+    </div>
+  );
+}
+
+const pageStyle = {
+  minHeight: "100vh",
+  background: "#FAF8F4",
+};
+
+const inputStyle = {
+  background: "#FAF8F4",
+  border: "2px solid #ECEAE3",
+  borderRadius: 10,
+  padding: "10px 12px",
+  color: "#1A1A2E",
+  fontSize: 13.5,
+  fontFamily: "'Inter', sans-serif",
+  outline: "none",
+};
