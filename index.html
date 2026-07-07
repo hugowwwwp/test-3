@@ -1,8 +1,47 @@
-// Suivi objectifs — v2.1
-import { useState, useEffect, useCallback, useRef } from "react";
-// v2.1
+<!DOCTYPE html>
+<html lang="fr">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>Suivi objectifs</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@500;600;700;800&family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
+<script src="https://cdnjs.cloudflare.com/ajax/libs/react/18.2.0/umd/react.production.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/react-dom/18.2.0/umd/react-dom.production.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/babel-standalone/7.24.7/babel.min.js"></script>
+<style>
+  html, body { margin: 0; padding: 0; background: #FAF8F4; }
+  * { box-sizing: border-box; }
+  input::placeholder { color: #C2BFB5; }
+  @keyframes fadeUp { from { opacity: 0; transform: translateY(14px); } to { opacity: 1; transform: translateY(0); } }
+  @keyframes popIn { 0% { transform: scale(0.6) rotate(-10deg); opacity: 0; } 60% { transform: scale(1.1) rotate(4deg); } 100% { transform: scale(1) rotate(0deg); opacity: 1; } }
+  .fade-item { animation: fadeUp 0.5s ease both; }
+  .celebrate-badge { animation: popIn 0.5s cubic-bezier(0.34,1.56,0.64,1) both; }
+</style>
+</head>
+<body>
+<div id="root"></div>
+<script>
+  var _origWarn = console.warn;
+  console.warn = function() {
+    if (typeof arguments[0] === "string" && arguments[0].indexOf("in-browser Babel") !== -1) return;
+    _origWarn.apply(console, arguments);
+  };
+</script>
+<script type="text/babel" data-presets="react">
 
-// ---- helpers ----------------------------------------------------------
+const { useState, useEffect, useCallback, useRef } = React;
+
+const storage = {
+  async get(key) {
+    const v = localStorage.getItem(key);
+    return v === null ? null : { key, value: v };
+  },
+  async set(key, value) {
+    localStorage.setItem(key, value);
+    return { key, value };
+  },
+};
 
 function todayKey(d = new Date()) {
   return d.toISOString().slice(0, 10);
@@ -46,7 +85,6 @@ const MEAL_SLOTS = [
 
 const DEFAULT_TARGET = 2400;
 
-// Planning hebdo : 0 = dimanche ... 6 = samedi (JS Date.getDay())
 const SCHEDULE = {
   1: { type: "climb", label: "Escalade" },
   2: { type: "rest", label: "Repos ou marche" },
@@ -67,11 +105,9 @@ const HOME_WORKOUT = [
 ];
 const HOME_WORKOUT_ROUNDS = 3;
 
-// ---- storage ------------------------------------------------------
-
 async function loadDay(key) {
   try {
-    const res = await window.storage.get(`day:${key}`, false);
+    const res = await storage.get(`day:${key}`);
     return res ? JSON.parse(res.value) : null;
   } catch {
     return null;
@@ -79,14 +115,14 @@ async function loadDay(key) {
 }
 async function saveDay(key, data) {
   try {
-    await window.storage.set(`day:${key}`, JSON.stringify(data), false);
+    await storage.set(`day:${key}`, JSON.stringify(data));
   } catch (e) {
     console.error(e);
   }
 }
 async function loadWeek(key) {
   try {
-    const res = await window.storage.get(`week:${key}`, false);
+    const res = await storage.get(`week:${key}`);
     return res ? JSON.parse(res.value) : null;
   } catch {
     return null;
@@ -94,14 +130,14 @@ async function loadWeek(key) {
 }
 async function saveWeek(key, data) {
   try {
-    await window.storage.set(`week:${key}`, JSON.stringify(data), false);
+    await storage.set(`week:${key}`, JSON.stringify(data));
   } catch (e) {
     console.error(e);
   }
 }
 async function loadSettings() {
   try {
-    const res = await window.storage.get("settings", false);
+    const res = await storage.get("settings");
     return res ? JSON.parse(res.value) : null;
   } catch {
     return null;
@@ -109,7 +145,7 @@ async function loadSettings() {
 }
 async function saveSettings(data) {
   try {
-    await window.storage.set("settings", JSON.stringify(data), false);
+    await storage.set("settings", JSON.stringify(data));
   } catch (e) {
     console.error(e);
   }
@@ -126,8 +162,6 @@ function emptyDay() {
 function emptyWeek() {
   return { climbing: 0, home: 0, weight: "" };
 }
-
-// ---- UI pieces ------------------------------------------------------
 
 function Check({ checked, onToggle, label, color }) {
   const [pop, setPop] = useState(false);
@@ -256,9 +290,7 @@ const stepBtnStyle = {
   justifyContent: "center",
 };
 
-// ---- main ------------------------------------------------------
-
-export default function Tracker() {
+function Tracker() {
   const [ready, setReady] = useState(false);
   const [dateKey] = useState(todayKey());
   const [weekKey] = useState(isoWeekKey());
@@ -361,18 +393,6 @@ export default function Tracker() {
 
   return (
     <div style={pageStyle}>
-      <style>{`
-        @import url('https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@500;600;700;800&family=Inter:wght@400;500;600;700&display=swap');
-        * { box-sizing: border-box; }
-        input::placeholder { color: #C2BFB5; }
-        @keyframes fadeUp { from { opacity: 0; transform: translateY(14px); } to { opacity: 1; transform: translateY(0); } }
-        @keyframes floaty { 0%,100% { transform: translateY(0px); } 50% { transform: translateY(-6px); } }
-        @keyframes shimmer { 0% { background-position: -200px 0; } 100% { background-position: 200px 0; } }
-        @keyframes popIn { 0% { transform: scale(0.6) rotate(-10deg); opacity: 0; } 60% { transform: scale(1.1) rotate(4deg); } 100% { transform: scale(1) rotate(0deg); opacity: 1; } }
-        .fade-item { animation: fadeUp 0.5s ease both; }
-        .celebrate-badge { animation: popIn 0.5s cubic-bezier(0.34,1.56,0.64,1) both; }
-      `}</style>
-
       {celebrate && (
         <div
           className="celebrate-badge"
@@ -397,7 +417,6 @@ export default function Tracker() {
       )}
 
       <div style={{ maxWidth: 480, margin: "0 auto", padding: "30px 18px 60px" }}>
-        {/* Hero */}
         <div
           className="fade-item"
           style={{
@@ -460,7 +479,6 @@ export default function Tracker() {
           </div>
         </div>
 
-        {/* Sport du jour */}
         <div
           className="fade-item"
           style={{
@@ -468,7 +486,6 @@ export default function Tracker() {
             borderRadius: 20,
             padding: "18px 20px",
             marginBottom: 20,
-            animationDelay: "0.03s",
           }}
         >
           <div style={{ display: "flex", alignItems: "center", gap: 12 }}>
@@ -511,17 +528,15 @@ export default function Tracker() {
           )}
         </div>
 
-        {/* Daily checklist */}
-        <Section title="Aujourd'hui" emoji="✅" delay={0.05}>
-          {DAILY_ITEMS.map((item, i) => (
-            <div key={item.id} className="fade-item" style={{ animationDelay: `${0.08 * i}s` }}>
+        <Section title="Aujourd'hui" emoji="✅">
+          {DAILY_ITEMS.map((item) => (
+            <div key={item.id} className="fade-item">
               <Check label={item.label} color={item.color} checked={day.checks[item.id]} onToggle={() => toggleCheck(item.id)} />
             </div>
           ))}
         </Section>
 
-        {/* Optional items */}
-        <div className="fade-item" style={{ marginBottom: 22, animationDelay: "0.08s" }}>
+        <div className="fade-item" style={{ marginBottom: 22 }}>
           <div
             style={{
               fontFamily: "'Inter', sans-serif",
@@ -546,8 +561,7 @@ export default function Tracker() {
           ))}
         </div>
 
-        {/* Meals */}
-        <Section title="Repas du jour" emoji="🍽️" delay={0.1}>
+        <Section title="Repas du jour" emoji="🍽️">
           <div
             style={{
               background: "#FFFFFF",
@@ -642,8 +656,7 @@ export default function Tracker() {
           </div>
         </Section>
 
-        {/* Weekly */}
-        <Section title="Cette semaine" emoji="📅" delay={0.15}>
+        <Section title="Cette semaine" emoji="📅">
           <Stepper label="Séances escalade" emoji="🧗" color="#FF5A36" value={week.climbing} max={3} onChange={(v) => updateWeek("climbing", v)} />
           <Stepper label="Séances maison" emoji="🏠" color="#7C5CFF" value={week.home} max={3} onChange={(v) => updateWeek("home", v)} />
           <div
@@ -682,9 +695,9 @@ export default function Tracker() {
   );
 }
 
-function Section({ title, emoji, delay, children }) {
+function Section({ title, emoji, children }) {
   return (
-    <div className="fade-item" style={{ marginBottom: 22, animationDelay: `${delay}s` }}>
+    <div className="fade-item" style={{ marginBottom: 22 }}>
       <div
         style={{
           display: "flex",
@@ -720,3 +733,10 @@ const inputStyle = {
   fontFamily: "'Inter', sans-serif",
   outline: "none",
 };
+
+const root = ReactDOM.createRoot(document.getElementById("root"));
+root.render(<Tracker />);
+
+</script>
+</body>
+</html>
